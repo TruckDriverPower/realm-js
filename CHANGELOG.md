@@ -1,3 +1,89 @@
+vNext (TBD)
+=============================================================
+### Breaking changes
+* `Realm.openAsync` will no longer open the realm if an error has occured. Previously this resulted in the callback being invoked twice - once with an error and a second time - with the synchronously opened Realm.
+
+### Enhancements
+
+### Bug fixes
+
+1.10.0 Release notes (2017-7-12)
+=============================================================
+### Breaking changes
+* None
+
+### Enhancements
+* Added `Realm.prototype.empty` which is a property that indicates whether or not the realm has any objects in it.
+
+### Bug fixes
+* Fix crash on Node.js when a listener callback throws an error.
+  The error will now be forwarded to Node's fatal error handling facilities. This means better error reporting,
+  the ability to debug such errors in a Node.js debugger, and proper invocation of the `uncaughtError` event on the `process` object.
+
+1.9.0 Release notes (2017-7-10)
+=============================================================
+### Breaking changes
+* None
+
+### Enhancements
+* Add support for iOS React Native 0.46. Thanks [@ovr](https://github.com/ovr)!
+* Add support for Linking Objects (AKA Backlinks).
+* Add support for retrieving user account information.
+* Add optional `server` parameter to `Realm.Sync.User.adminUser`
+  Specifying the server address the same way as in `Realm.Sync.User.login` allows the admin token user to use the permission realm APIs.
+
+### Bug fixes
+* Fix regression where setting a Results or List object to a `list` property would throw.
+
+1.8.3 Release notes (2017-6-27)
+=============================================================
+### Breaking changes
+* None
+
+### Enhancements
+* None
+
+### Bug fixes
+* Fix admin users not appearing in `Realm.Sync.User.all`, which broke getting an access token for them.
+
+1.8.2 Release notes (2017-6-26)
+=============================================================
+### Breaking changes
+* None
+
+### Enhancements
+* Added `indexOf()` method on `Realm.Results` and `Realm.List` that returns the index of the object in the collection.
+
+### Bug fixes
+* Fix opening synced realms with a logged-in admin user. 
+
+1.8.1 Release notes (2017-6-20)
+=============================================================
+### Breaking changes
+* None
+
+### Enhancements
+* Accessing `Realm.Sync` when sync is not enabled will no longer throw, but return `undefined`.
+* Better error messages when creating objects.
+* Added bundled TypeScript declarations of the Realm API.
+* Added `objectSchema()` method on `Realm.Object` that returns the schema for the object.
+
+### Bug fixes
+* Fix `Realm.Sync.User.prototype.isAdmin` returning `false` for logged-in admin users. 
+
+1.8.0 Release notes (2017-6-15)
+=============================================================
+### Breaking changes
+* None
+
+### Enhancements
+* Updated core and sync dependencies
+* Unified packaging
+
+### Bug fixes
+* Fix crash when used with the React Native C++ bridge
+* Fix `Realm.open` and `Realm.asyncOpen` missing when in the React Native debugger
+
 1.3.1 Release notes (2017-5-18)
 =============================================================
 ### Breaking changes

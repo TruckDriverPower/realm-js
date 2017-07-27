@@ -59,9 +59,6 @@ static std::string normalize_realm_path(std::string path) {
 }
 
 template<typename T>
-class Realm;
-
-template<typename T>
 class RealmClass;
 
 template<typename T>
@@ -132,7 +129,7 @@ class RealmDelegate : public BindingContext {
 
         std::list<Protected<FunctionType>> notifications_copy(m_notifications);
         for (auto &callback : notifications_copy) {
-            Function<T>::call(m_context, callback, realm_object, 2, arguments);
+            Function<T>::callback(m_context, callback, realm_object, 2, arguments);
         }
     }
 
@@ -162,6 +159,8 @@ public:
     using ConstructorMap = typename Schema<T>::ConstructorMap;
     
     using WaitHandler = void(std::error_code);
+    using ProgressHandler = void(uint64_t transferred_bytes, uint64_t transferrable_bytes);
+
 
     static FunctionType create_constructor(ContextType);
 
@@ -179,6 +178,7 @@ public:
     static void close(ContextType, FunctionType, ObjectType, size_t, const ValueType[], ReturnValue &);
 
     // properties
+    static void get_empty(ContextType, ObjectType, ReturnValue &);
     static void get_path(ContextType, ObjectType, ReturnValue &);
     static void get_schema_version(ContextType, ObjectType, ReturnValue &);
     static void get_schema(ContextType, ObjectType, ReturnValue &);
@@ -226,6 +226,7 @@ public:
     };
 
     PropertyMap<T> const properties = {
+        {"empty", {wrap<get_empty>, nullptr}},
         {"path", {wrap<get_path>, nullptr}},
         {"schemaVersion", {wrap<get_schema_version>, nullptr}},
         {"schema", {wrap<get_schema>, nullptr}},
@@ -349,8 +350,7 @@ void RealmClass<T>::constructor(ContextType ctx, ObjectType this_object, size_t 
             static const String encryption_key_string = "encryptionKey";
             ValueType encryption_key_value = Object::get_property(ctx, object, encryption_key_string);
             if (!Value::is_undefined(ctx, encryption_key_value)) {
-                NativeAccessor accessor(ctx);
-                auto encryption_key = accessor.template unbox<BinaryData>(encryption_key_value);
+                auto encryption_key = Value::validated_to_binary(ctx, encryption_key_value, "encryptionKey");
                 config.encryption_key.assign(encryption_key.data(), encryption_key.data() + encryption_key.size());
             }
 
@@ -466,8 +466,7 @@ void RealmClass<T>::schema_version(ContextType ctx, FunctionType, ObjectType thi
     realm::Realm::Config config;
     config.path = normalize_realm_path(Value::validated_to_string(ctx, arguments[0]));
     if (argc == 2) {
-        NativeAccessor accessor(ctx);
-        auto encryption_key = accessor.template unbox<BinaryData>(arguments[1]);
+        auto encryption_key = Value::validated_to_binary(ctx, arguments[1], "encryptionKey");
         config.encryption_key.assign(encryption_key.data(), encryption_key.data() + encryption_key.size());
     }
 
@@ -502,6 +501,13 @@ void RealmClass<T>::get_default_path(ContextType ctx, ObjectType object, ReturnV
 template<typename T>
 void RealmClass<T>::set_default_path(ContextType ctx, ObjectType object, ValueType value) {
     js::set_default_path(Value::validated_to_string(ctx, value, "defaultPath"));
+}
+
+template<typename T>
+void RealmClass<T>::get_empty(ContextType ctx, ObjectType object, ReturnValue &return_value) {
+    SharedRealm& realm = *get_internal<T, RealmClass<T>>(object);
+    bool is_empty = ObjectStore::is_empty(realm->read_group());
+    return_value.set(is_empty);
 }
 
 template<typename T>
@@ -550,11 +556,11 @@ void RealmClass<T>::wait_for_download_completion(ContextType ctx, FunctionType, 
     ValueType sync_config_value = Object::get_property(ctx, config_object, "sync");
     if (!Value::is_undefined(ctx, sync_config_value)) {
         realm::Realm::Config config;
+        config.cache = false;
         static const String encryption_key_string = "encryptionKey";
         ValueType encryption_key_value = Object::get_property(ctx, config_object, encryption_key_string);
         if (!Value::is_undefined(ctx, encryption_key_value)) {
-            NativeAccessor accessor(ctx);
-            auto encryption_key = accessor.template unbox<BinaryData>(encryption_key_value);
+            auto encryption_key = Value::validated_to_binary(ctx, encryption_key_value, "encryptionKey");
             config.encryption_key.assign(encryption_key.data(), encryption_key.data() + encryption_key.size());
         }
         
@@ -564,7 +570,7 @@ void RealmClass<T>::wait_for_download_completion(ContextType ctx, FunctionType, 
         Protected<FunctionType> protected_callback(ctx, callback_function);
         Protected<ObjectType> protected_this(ctx, this_object);
         Protected<typename T::GlobalContext> protected_ctx(Context<T>::get_global_context(ctx));
-
+        
         EventLoopDispatcher<WaitHandler> wait_handler([=](std::error_code error_code) {
             HANDLESCOPE
             if (!error_code) {
@@ -584,13 +590,45 @@ void RealmClass<T>::wait_for_download_completion(ContextType ctx, FunctionType, 
         });
         std::function<WaitHandler> waitFunc = std::move(wait_handler);
 
+        std::function<ProgressHandler> progressFunc; 
+
         auto realm = realm::Realm::get_shared_realm(config);
-        if (auto sync_config = config.sync_config) {
+        if (auto sync_config = config.sync_config)
+        {
+            static const String progressFuncName = "_onDownloadProgress";
+            bool progressFuncDefined = false;
+            if (!Value::is_boolean(ctx, sync_config_value) && !Value::is_undefined(ctx, sync_config_value))
+            {
+                auto sync_config_object = Value::validated_to_object(ctx, sync_config_value);
+
+                ValueType progressFuncValue = Object::get_property(ctx, sync_config_object, progressFuncName);
+                progressFuncDefined = !Value::is_undefined(ctx, progressFuncValue);
+
+                if (progressFuncDefined)
+                {
+                    Protected<FunctionType> protected_progressCallback(protected_ctx, Value::validated_to_function(protected_ctx, progressFuncValue));
+                    EventLoopDispatcher<ProgressHandler> progress_handler([=](uint64_t transferred_bytes, uint64_t transferrable_bytes) {
+                        HANDLESCOPE
+                        ValueType callback_arguments[2];
+                        callback_arguments[0] = Value::from_number(protected_ctx, transferred_bytes);
+                        callback_arguments[1] = Value::from_number(protected_ctx, transferrable_bytes);
+
+                        Function<T>::callback(protected_ctx, protected_progressCallback, protected_this, 2, callback_arguments);
+                    });
+
+                    progressFunc = std::move(progress_handler);
+                }
+            }
+
             std::shared_ptr<SyncUser> user = sync_config->user;
             if (user && user->state() != SyncUser::State::Error) {
                 if (auto session = user->session_for_on_disk_path(config.path)) {
+                    if (progressFuncDefined) {
+                        session->register_progress_notifier(std::move(progressFunc), SyncSession::NotifierType::download, false);
+                    } 
+                    
                     session->wait_for_download_completion([=](std::error_code error_code) {
-                        realm->config(); //capture and keep realm instance for till here
+                        realm->close(); //capture and keep realm instance for until here
                         waitFunc(error_code);
                     });
                     return;
@@ -603,7 +641,7 @@ void RealmClass<T>::wait_for_download_completion(ContextType ctx, FunctionType, 
 
             ValueType callback_arguments[1];
             callback_arguments[0] = object;
-            Function<T>::call(protected_ctx, protected_callback, protected_this, 1, callback_arguments);
+            Function<T>::callback(protected_ctx, protected_callback, protected_this, 1, callback_arguments);
             return;
         }
     }
@@ -611,7 +649,7 @@ void RealmClass<T>::wait_for_download_completion(ContextType ctx, FunctionType, 
 
     ValueType callback_arguments[1];
     callback_arguments[0] = Value::from_null(ctx);
-    Function<T>::call(ctx, callback_function, this_object, 1, callback_arguments);
+    Function<T>::callback(ctx, callback_function, this_object, 1, callback_arguments);
 }
 
 template<typename T>
@@ -632,7 +670,7 @@ void RealmClass<T>::object_for_primary_key(ContextType ctx, FunctionType, Object
     SharedRealm realm = *get_internal<T, RealmClass<T>>(this_object);
     std::string object_type;
     auto &object_schema = validated_object_schema_for_value(ctx, realm, arguments[0], object_type);
-    NativeAccessor accessor(ctx, realm);
+    NativeAccessor accessor(ctx, realm, object_schema);
     auto realm_object = realm::Object::get_for_primary_key(accessor, realm, object_schema, arguments[1]);
 
     if (realm_object.is_valid()) {
@@ -661,7 +699,7 @@ void RealmClass<T>::create(ContextType ctx, FunctionType, ObjectType this_object
         update = Value::validated_to_boolean(ctx, arguments[2], "update");
     }
 
-    NativeAccessor accessor(ctx, realm);
+    NativeAccessor accessor(ctx, realm, object_schema);
     auto realm_object = realm::Object::create<ValueType>(accessor, realm, object_schema, object, update);
     return_value.set(RealmObjectClass<T>::create_instance(ctx, std::move(realm_object)));
 }

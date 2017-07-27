@@ -20,6 +20,8 @@
 
 'use strict';
 
+/* global REALM_MODULE_PATH */
+
 const Realm = require('realm');
 const TestCase = require('./asserts');
 
@@ -74,6 +76,23 @@ function promisifiedLogin(server, username, password) {
     });
 }
 
+function runOutOfProcess(nodeJsFilePath) {
+    var nodeArgs = Array.prototype.slice.call(arguments);
+    let tmpDir = tmp.dirSync();
+    let content = fs.readFileSync(nodeJsFilePath, 'utf8');
+    let tmpFile = tmp.fileSync({ dir: tmpDir.name });
+    fs.appendFileSync(tmpFile.fd, content, { encoding: 'utf8' });
+    nodeArgs[0] = tmpFile.name;
+    return new Promise((resolve, reject) => {
+        const child = execFile('node', nodeArgs, { cwd: tmpDir.name }, (error, stdout, stderr) => {
+            if (error) {
+                reject(new Error(`Error executing ${nodeJsFilePath} Error: ${error}`));
+            }
+            resolve();
+        });
+    })
+}
+
 module.exports = {
 
     testLocalRealmHasNoSession() {
@@ -103,7 +122,7 @@ module.exports = {
                     catch (e) {
                         reject(e)
                     }
-                };
+                }
 
                 // Let the error handler trigger our checks when the access token was refreshed.
                 postTokenRefreshChecks._notifyOnAccessTokenRefreshed = accessTokenRefreshed;
@@ -131,23 +150,9 @@ module.exports = {
         const realmName = uuid();
         const expectedObjectsCount = 3;
 
-        let tmpDir = tmp.dirSync();
-        let content = fs.readFileSync(__dirname + '/download-api-helper.js', 'utf8');
-        let tmpFile = tmp.fileSync({ dir: tmpDir.name });
-        fs.appendFileSync(tmpFile.fd, content, { encoding: 'utf8' });
-
-        return new Promise((resolve, reject) => {
-            //execute download-api-helper which inserts predefined number of objects into the synced realm.
-            const child = execFile('node', [tmpFile.name, username, realmName, REALM_MODULE_PATH], { cwd: tmpDir.name }, (error, stdout, stderr) => {
-                if (error) {
-                    reject(new Error('Error executing download api helper' + error));
-                }
-                resolve();
-            });
-        })
-        .then(() => {
-            return promisifiedLogin('http://localhost:9080', username, 'password').then(user => {
-                return new Promise((resolve, reject) => {
+        runOutOfProcess(__dirname + '/download-api-helper.js', username, realmName, REALM_MODULE_PATH)
+            .then(() => {
+                return promisifiedLogin('http://localhost:9080', username, 'password').then(user => {
                     const accessTokenRefreshed = this;
                     let successCounter = 0;
 
@@ -156,22 +161,20 @@ module.exports = {
                         schema: [{ name: 'Dog', properties: { name: 'string' } }],
                     };
 
-                    Realm.open(config)
+                    return Realm.open(config)
                         .then(realm => {
                             let actualObjectsCount = realm.objects('Dog').length;
                             TestCase.assertEqual(actualObjectsCount, expectedObjectsCount, "Synced realm does not contain the expected objects count");
-
-                            const session = realm.syncSession;
+                            return realm.syncSession;
+                        }).then(session => {
                             TestCase.assertInstanceOf(session, Realm.Sync.Session);
                             TestCase.assertEqual(session.user.identity, user.identity);
                             TestCase.assertEqual(session.config.url, config.sync.url);
                             TestCase.assertEqual(session.config.user.identity, config.sync.user.identity);
                             TestCase.assertEqual(session.state, 'active');
-                            resolve();
-                        }).catch(e => { reject(e) });
+                        });
                 });
             });
-        });
     },
 
     testRealmOpenAsync() {
@@ -183,20 +186,7 @@ module.exports = {
         const realmName = uuid();
         const expectedObjectsCount = 3;
 
-        let tmpDir = tmp.dirSync();
-        let content = fs.readFileSync(__dirname + '/download-api-helper.js', 'utf8');
-        let tmpFile = tmp.fileSync({ dir: tmpDir.name });
-        fs.appendFileSync(tmpFile.fd, content, { encoding: 'utf8' });
-
-        return new Promise((resolve, reject) => {
-            //execute download-api-helper which inserts predefined number of objects into the synced realm.
-            const child = execFile('node', [tmpFile.name, username, realmName, REALM_MODULE_PATH], { cwd: tmpDir.name }, (error, stdout, stderr) => {
-                if (error) {
-                    reject(new Error('Error executing download api helper' + error));
-                }
-                resolve();
-            });
-        })
+        runOutOfProcess(__dirname + '/download-api-helper.js', username, realmName, REALM_MODULE_PATH)
             .then(() => {
                 return promisifiedLogin('http://localhost:9080', username, 'password').then(user => {
                     return new Promise((resolve, reject) => {
@@ -217,13 +207,101 @@ module.exports = {
                                 let actualObjectsCount = realm.objects('Dog').length;
                                 TestCase.assertEqual(actualObjectsCount, expectedObjectsCount, "Synced realm does not contain the expected objects count");
 
-                                const session = realm.syncSession;
-                                TestCase.assertInstanceOf(session, Realm.Sync.Session);
-                                TestCase.assertEqual(session.user.identity, user.identity);
-                                TestCase.assertEqual(session.config.url, config.sync.url);
-                                TestCase.assertEqual(session.config.user.identity, config.sync.user.identity);
-                                TestCase.assertEqual(session.state, 'active');
-                                resolve();
+                                setTimeout(() => {
+                                    try {
+                                        const session = realm.syncSession;
+                                        TestCase.assertInstanceOf(session, Realm.Sync.Session);
+                                        TestCase.assertEqual(session.user.identity, user.identity);
+                                        TestCase.assertEqual(session.config.url, config.sync.url);
+                                        TestCase.assertEqual(session.config.user.identity, config.sync.user.identity);
+                                        TestCase.assertEqual(session.state, 'active');
+                                        resolve();
+                                    } catch (e) {
+                                        reject(e);
+                                    }
+                                }, 50);
+                            }
+                            catch (e) {
+                                reject(e);
+                            }
+                        });
+                    });
+                });
+            });
+    },
+
+    testProgressNotificationsForRealmOpen() {
+        if (!isNodeProccess) {
+            return Promise.resolve();
+        }
+
+        const username = uuid();
+        const realmName = uuid();
+        const expectedObjectsCount = 3;
+
+        runOutOfProcess(__dirname + '/download-api-helper.js', username, realmName, REALM_MODULE_PATH)
+            .then(() => {
+                return promisifiedLogin('http://localhost:9080', username, 'password').then(user => {
+                    const accessTokenRefreshed = this;
+                    let successCounter = 0;
+                    let progressNotificationCalled = false;
+                    let config = {
+                        sync: {
+                            user,
+                            url: `realm://localhost:9080/~/${realmName}`,
+                            _onDownloadProgress: (transferred, total) => {
+                                progressNotificationCalled = true
+                            },
+                        },
+                        schema: [{ name: 'Dog', properties: { name: 'string' } }],
+                    };
+
+                    return Realm.open(config)
+                        .then(realm => {
+                        }).then(session => {
+                            TestCase.assertTrue(progressNotificationCalled, "Progress notification not called for Realm.open");
+                        });
+                });
+            });
+    },
+    
+    testProgressNotificationsForRealmOpenAsync() {
+        if (!isNodeProccess) {
+            return Promise.resolve();
+        }
+
+        const username = uuid();
+        const realmName = uuid();
+        const expectedObjectsCount = 3;
+
+        runOutOfProcess(__dirname + '/download-api-helper.js', username, realmName, REALM_MODULE_PATH)
+            .then(() => {
+                return promisifiedLogin('http://localhost:9080', username, 'password').then(user => {
+                    return new Promise((resolve, reject) => {
+                        let progressNotificationCalled = false;
+                        let config = {
+                            sync: { user, url: `realm://localhost:9080/~/${realmName}`,
+                                _onDownloadProgress: (transferred, total) => { 
+                                    progressNotificationCalled = true
+                                },
+                            },
+                            schema: [{ name: 'Dog', properties: { name: 'string' } }],
+                        };
+
+                        Realm.openAsync(config, (error, realm) => {
+                            try {
+                                if (error) {
+                                    reject(error);
+                                }
+
+                                setTimeout(() => {
+                                    try {
+                                        TestCase.assertTrue(progressNotificationCalled, "Progress notification not called for Realm.openAsync");
+                                        resolve();
+                                    } catch (e) {
+                                        reject(e);
+                                    }
+                                }, 50);
                             }
                             catch (e) {
                                 reject(e);
@@ -243,20 +321,7 @@ module.exports = {
         const realmName = uuid();
         const expectedObjectsCount = 3;
 
-        let tmpDir = tmp.dirSync();
-        let content = fs.readFileSync(__dirname + '/download-api-helper.js', 'utf8');
-        let tmpFile = tmp.fileSync({ dir: tmpDir.name });
-        fs.appendFileSync(tmpFile.fd, content, { encoding: 'utf8' });
-
-        return new Promise((resolve, reject) => {
-            //execute download-api-helper which inserts predefined number of objects into the synced realm.
-            const child = execFile('node', [tmpFile.name, username, realmName, REALM_MODULE_PATH], { cwd: tmpDir.name }, (error, stdout, stderr) => {
-                if (error) {
-                    reject(new Error('Error executing download api helper' + error));
-                }
-                resolve();
-            });
-        })
+       runOutOfProcess(__dirname + '/download-api-helper.js', username, realmName, REALM_MODULE_PATH)
             .then(() => {
                 return promisifiedLogin('http://localhost:9080', username, 'password').then(user => {
                     return new Promise((resolve, reject) => {

@@ -21,6 +21,7 @@
 #include <list>
 #include <map>
 #include <set>
+#include <regex>
 
 #include "event_loop_dispatcher.hpp"
 #include "platform.hpp"
@@ -117,12 +118,16 @@ void UserClass<T>::is_admin(ContextType ctx, ObjectType object, ReturnValue &ret
 
 template<typename T>
 void UserClass<T>::create_user(ContextType ctx, FunctionType, ObjectType this_object, size_t argc, const ValueType arguments[], ReturnValue &return_value) {
-    validate_argument_count(argc, 3, 4);
+    validate_argument_count(argc, 3, 5);
     SharedUser *user = new SharedUser(SyncManager::shared().get_user(
-        Value::validated_to_string(ctx, arguments[1]),
-        Value::validated_to_string(ctx, arguments[2]),
-        (std::string)Value::validated_to_string(ctx, arguments[0]),
-        Value::validated_to_boolean(ctx, arguments[3]) ? SyncUser::TokenType::Admin : SyncUser::TokenType::Normal));
+        Value::validated_to_string(ctx, arguments[1], "identity"),
+        Value::validated_to_string(ctx, arguments[2], "refreshToken"),
+        (std::string)Value::validated_to_string(ctx, arguments[0], "authServerUrl"),
+        Value::validated_to_boolean(ctx, arguments[3], "isAdminToken") ? SyncUser::TokenType::Admin : SyncUser::TokenType::Normal));
+
+    if (argc == 5) {
+        (*user)->set_is_admin(Value::validated_to_boolean(ctx, arguments[4], "isAdmin"));
+    }
     return_value.set(create_object<T, UserClass<T>>(ctx, user));
 }
 
@@ -130,34 +135,12 @@ template<typename T>
 void UserClass<T>::all_users(ContextType ctx, ObjectType object, ReturnValue &return_value) {
     auto users = Object::create_empty(ctx);
     for (auto user : SyncManager::shared().all_logged_in_users()) {
-        if (!user->is_admin()) {
+        if (user->token_type() == SyncUser::TokenType::Normal) {
             Object::set_property(ctx, users, user->identity(), create_object<T, UserClass<T>>(ctx, new SharedUser(user)), ReadOnly | DontDelete);
         }
     }
     return_value.set(users);
 }
-
-/*
-template<typename T>
-void UserClass<T>::current_user(ContextType ctx, ObjectType object, ReturnValue &return_value) {
-    SharedUser *current = nullptr;
-    for (auto user : SyncManager::shared().all_logged_in_users()) {
-        if (!user->is_admin()) {
-            if (current != nullptr) {
-                throw std::runtime_error("More than one user logged in currently.");
-            }
-            current = new SharedUser(user);
-        }
-    }
-
-    if (current != nullptr) {
-        return_value.set(create_object<T, UserClass<T>>(ctx, current));
-    }
-    else {
-        return_value.set_undefined();
-    }
-}
-*/
 
 template<typename T>
 void UserClass<T>::logout(ContextType ctx, FunctionType, ObjectType this_object, size_t, const ValueType[], ReturnValue &) {
@@ -230,7 +213,7 @@ public:
         arguments[0] = create_object<T, SessionClass<T>>(m_ctx, new WeakSession(session));
         arguments[1] = error_object;
 
-        Function<T>::call(m_ctx, m_func, 2, arguments);
+        Function<T>::callback(m_ctx, m_func, typename T::Object(), 2, arguments);
     }
 private:
     const Protected<typename T::GlobalContext> m_ctx;
@@ -399,26 +382,14 @@ void SyncClass<T>::populate_sync_config(ContextType ctx, ObjectType realm_constr
 
         EventLoopDispatcher<SyncBindSessionHandler> bind([protected_ctx, protected_sync](const std::string& path, const realm::SyncConfig& config, std::shared_ptr<SyncSession>) {
             HANDLESCOPE
-            if (config.user->is_admin()) {
-                // FIXME: This log-in callback is called while the object store still holds some sync-related locks.
-                // Notify the object store of the access token asynchronously to avoid the deadlock that would result
-                // from reentering the object store here.
-                auto thread = std::thread([path, config]{
-                    auto session = SyncManager::shared().get_existing_active_session(path);
-                    session->refresh_access_token(config.user->refresh_token(), config.realm_url);
-                });
-                thread.detach();
-            }
-            else {
-                ObjectType user_constructor = Object::validated_get_object(protected_ctx, protected_sync, std::string("User"));
-                FunctionType refreshAccessToken = Object::validated_get_function(protected_ctx, user_constructor, std::string("_refreshAccessToken"));
+            ObjectType user_constructor = Object::validated_get_object(protected_ctx, protected_sync, std::string("User"));
+            FunctionType refreshAccessToken = Object::validated_get_function(protected_ctx, user_constructor, std::string("_refreshAccessToken"));
 
-                ValueType arguments[3];
-                arguments[0] = create_object<T, UserClass<T>>(protected_ctx, new SharedUser(config.user));
-                arguments[1] = Value::from_string(protected_ctx, path.c_str());
-                arguments[2] = Value::from_string(protected_ctx, config.realm_url.c_str());
-                Function::call(protected_ctx, refreshAccessToken, 3, arguments);
-            }
+            ValueType arguments[3];
+            arguments[0] = create_object<T, UserClass<T>>(protected_ctx, new SharedUser(config.user));
+            arguments[1] = Value::from_string(protected_ctx, path.c_str());
+            arguments[2] = Value::from_string(protected_ctx, config.realm_url.c_str());
+            Function::call(protected_ctx, refreshAccessToken, 3, arguments);
         });
 
         std::function<SyncSessionErrorHandler> error_handler;
@@ -434,7 +405,11 @@ void SyncClass<T>::populate_sync_config(ContextType ctx, ObjectType realm_constr
         }
 
         std::string raw_realm_url = Object::validated_get_string(ctx, sync_config_object, "url");
-
+        if (shared_user->token_type() == SyncUser::TokenType::Admin) {
+            static std::regex tilde("/~/");
+            raw_realm_url = std::regex_replace(raw_realm_url, tilde, "/__auth/");
+        }
+        
         bool client_validate_ssl = true;
         ValueType validate_ssl_temp = Object::get_property(ctx, sync_config_object, "validate_ssl");
         if (!Value::is_undefined(ctx, validate_ssl_temp)) {
