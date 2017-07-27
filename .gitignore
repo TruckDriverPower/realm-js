@@ -107,7 +107,6 @@ npm-debug.log
 *.lock
 
 # Android/IJ
-/android/
 .idea
 .gradle
 local.properties
