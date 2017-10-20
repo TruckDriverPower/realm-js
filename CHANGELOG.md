@@ -1,11 +1,132 @@
-vNext (TBD)
+2.0.0 Release notes (2017-10-17)
 =============================================================
 ### Breaking changes
-* `Realm.openAsync` will no longer open the realm if an error has occured. Previously this resulted in the callback being invoked twice - once with an error and a second time - with the synchronously opened Realm.
+* Switch to Sync protocol 2.0, compatible with Realm Object Server 2.0.0. This version does NOT support 1.x.x of Realm Object Server. 
+* Upgraded to Realm Core 4.0.1, which has a new file format. If older Realm versions are opened, the database will be migrated automatically. 
+* Deprecate node 4 and node 5 support.
+* Renamed `setAccessToken()` to `setFeatureToken()`.
+* During iteration (`for ... of`) of `Realm.Results`, the results will be frozen using the `snapshot()` method (#1366).
 
 ### Enhancements
+* The data model now support arrays of primitive types!
+* Added `update` method to `Realm.Results` to support bulk updates (#808).
+* Added support for aggregate functions on `Realm.Results` and `Realm.List` of primitive types.
+* Handling of the situation when the client has to reset due to mismatching Realm versions (#795).
+* Added `Realm.subscribeToObjects()` to listen for changes in partially synced Realms.
+* Add support for sorting Lists and Results on values from linked objects.
+* Configuration of sync file system is not done on module import but later when actually needed by sync (#1351)
+* `Realm.Sync.User.adminUser()` will now throw an exception if either token or server argument is invalid.
 
 ### Bug fixes
+* Avoid closing then reopening a sync session when using `Realm.open` (#1391).
+* Respect custom Realm paths when using `Realm.open` (#1392 and #1393).
+* Fixed bug in `Realm.subscribeToObjects()`.
+* An issue where access tokens were not refreshed correctly has been addressed.
+
+### Internal
+* OpenSSL for Android is distributed in a separate package, and the build system needed updates to accommendate this.
+* Added `-fvisibility=hidden` to Android builds (reduces size of `.so` file).
+* Add `Session._overrideServer` to force an existing session to connect to a different server.
+* Alignment of permission schemas.
+* Upgrading to Realm Sync 2.0.2.
+* Upgrading to Realm Object Server 2.0.0
+
+
+1.13.0 Release notes (2017-10-5)
+=============================================================
+### Breaking changes
+* None.
+
+### Enhancements
+* Add a callback function used to verify SSL certificates in the sync config.
+* Added aggregate functions `min()`, `max()`, `sum()`, and `avg()` to `Realm.Results` and `Realm.List` (#807).
+* Added `deleteRealmIfMigrationNeeded` to configuration to delete a Realm if migration needed (#502).
+
+### Bug fixes
+* Fixed port conflict between RN >= 0.48 inspector proxy and RPC server used for Chrome debugging (#1294).
+* Workaround for RN >= 0.49 metro-bundler check for single string literal argument to `require()` (#1342)
+
+1.12.0 Release notes (2017-9-14)
+=============================================================
+
+### Enhancements
+* Improve performance of the RPC worker for chrome debugging.
+* Added Progress API `realm.syncSession.addProgressNotification` and `realm.syncSession.removeProgressNotification`
+* Added additional parameter for `Realm.open` and `Realm.openAsync` for download progress notifications
+* Added `Realm.deleteFile` for deleting a Realm (#363).
+* Added `Realm.deleteModel` for deleting a Realm model in a migration (#573).
+* Added support for in-memory Realms.
+* `Realm.Sync.User.login`, `Realm.Sync.User.register`, and `Realm.Sync.User.registerWithProvider` return Promises and deprecate the callback style for them. Callbacks will continue to work for backward compatibility.
+
+### Bug fixes
+* Adding missing TypeScript definitions; Permissions (#1283), `setFeatureToken()`, and instructions (#1298).
+* Removed `loginWithProvider` from TypeScript definition files. This API never existed and was incorrectly added.
+
+1.11.1 Release notes (2017-9-1)
+=============================================================
+### Breaking changes
+* None
+
+### Enhancements
+* None
+
+### Bug fixes
+* Fix accessToken.
+
+1.11.0 Release notes (2017-8-31)
+=============================================================
+### Breaking changes
+* None
+
+### Enhancements
+* Added methods `Realm.beginTransaction()`, `Realm.commitTransaction()`, `Realm.cancelTransaction()` to manually control write transactions.
+* Added property `Realm.isInTransaction` which indicates if write transaction is in progress.
+* Added `shouldCompactOnLaunch` to configuration (#507).
+* Added `Realm.compact()` for manually compacting Realm files.
+* Added various methods for permission management (#1204).
+
+### Bug fixes
+* None
+
+
+1.10.3 Release notes (2017-8-16)
+=============================================================
+### Breaking changes
+* setAccessToken renamed to setFeatureToken. setAccessToken still works for now.
+
+### Enhancements
+* None
+
+### Bug fixes
+* None
+
+
+1.10.2 Release notes (2017-8-16)
+=============================================================
+### Breaking changes
+* None
+
+### Enhancements
+* None
+
+### Bug fixes
+* RN 0.47 no longer breaks for Android due to a superfluous @override annotation
+
+
+1.10.1 Release notes (2017-8-2)
+=============================================================
+### Breaking changes
+* None
+
+### Enhancements
+* None
+
+### Bug fixes
+* `Realm.openAsync` will no longer open the realm if a sync error has occured. Previously this resulted in the callback being invoked twice - once with an error and a second time - with the synchronously opened Realm.
+* Database adapters will no longer process the sync history of realm files that are not requested by the adapter configuration. Previously this would lead to crashes for realm files that contained schemas that don't define primary keys.
+
+=======
+* None
 
 1.10.0 Release notes (2017-7-12)
 =============================================================
@@ -55,7 +176,7 @@ vNext (TBD)
 * Added `indexOf()` method on `Realm.Results` and `Realm.List` that returns the index of the object in the collection.
 
 ### Bug fixes
-* Fix opening synced realms with a logged-in admin user. 
+* Fix opening synced realms with a logged-in admin user.
 
 1.8.1 Release notes (2017-6-20)
 =============================================================
@@ -69,7 +190,7 @@ vNext (TBD)
 * Added `objectSchema()` method on `Realm.Object` that returns the schema for the object.
 
 ### Bug fixes
-* Fix `Realm.Sync.User.prototype.isAdmin` returning `false` for logged-in admin users. 
+* Fix `Realm.Sync.User.prototype.isAdmin` returning `false` for logged-in admin users.
 
 1.8.0 Release notes (2017-6-15)
 =============================================================

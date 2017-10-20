@@ -9,15 +9,11 @@ export NPM_CONFIG_PROGRESS=false
 TARGET=$1
 CONFIGURATION=${2:-Release}
 
-if echo $CONFIGURATION | grep -i "^Debug$" > /dev/null ; then
+if echo "$CONFIGURATION" | grep -i "^Debug$" > /dev/null ; then
   CONFIGURATION="Debug"
 fi
 
 IOS_SIM_DEVICE=${IOS_SIM_DEVICE:-} # use preferentially, otherwise will be set and re-exported
-ios_sim_default_device_type=${IOS_SIM_DEVICE_TYPE:-iPhone 5s}
-ios_sim_default_ios_version=${IOS_SIM_OS:-iOS 10.1}
-
-ACCEPTED_LICENSES='MIT, ISC, BSD, Apache-2.0, BSD-2-Clause, BSD-3-Clause, WTFPL, Unlicense, (MIT AND CC-BY-3.0)'
 
 PATH="/opt/android-sdk-linux/platform-tools:$PATH"
 SRCROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -44,17 +40,27 @@ LOGCAT_OUT="$SRCROOT/logcat_out.txt"
 
 
 download_server() {
-  sh ./scripts/download-object-server.sh
+  echo "test.sh: downloading ROS"
+  ./scripts/download-object-server.sh
 }
 
 start_server() {
-  sh ./object-server-for-testing/start-object-server.command &
+  echo "test.sh: starting ROS"
+  #disabled ROS logging
+  # sh ./object-server-for-testing/start-object-server.command &> /dev/null &
+
+  #enabled ROS logging
+  #sh ./object-server-for-testing/start-object-server.command &
+  export ROS_SKIP_PROMTS=true &&  ./node_modules/.bin/ros start --data realm-object-server-data &
   SERVER_PID=$!
+  echo ROS PID: ${SERVER_PID}
 }
 
 stop_server() {
+  echo stopping server
   if [[ ${SERVER_PID} -gt 0 ]] ; then
-    kill -9 ${SERVER_PID}
+    echo server is running. killing it
+    kill -9 ${SERVER_PID} || true
   fi
 }
 
@@ -120,13 +126,18 @@ xctest() {
   echo "  done"
 
   # - Run the build and test
+  xcrun xcodebuild -scheme "$1" -configuration "$CONFIGURATION" -sdk iphonesimulator -destination id="$IOS_SIM_DEVICE" build || {
+      EXITCODE=$?
+      echo "*** Failure (exit code $EXITCODE). ***"
+      exit $EXITCODE
+  }
   if [ -n "$XCPRETTY" ]; then
     log_temp=$(mktemp build.log.XXXXXX)
     if [ -e "$log_temp" ]; then
       rm "$log_temp"
     fi
-    xcrun xcodebuild -scheme "$1" -configuration "$CONFIGURATION" -sdk iphonesimulator -destination name="iPhone 5s" build test 2>&1 | tee "$log_temp" | "$XCPRETTY" -c --no-utf --report junit --output build/reports/junit.xml || {
-	    EXITCODE=$?
+    xcrun xcodebuild -scheme "$1" -configuration "$CONFIGURATION" -sdk iphonesimulator -destination name="iPhone 5s" test 2>&1 | tee "$log_temp" | "$XCPRETTY" -c --no-utf --report junit --output build/reports/junit.xml || {
+        EXITCODE=$?
         printf "*** Xcode Failure (exit code %s). The full xcode log follows: ***\n\n" "$EXITCODE"
         cat "$log_temp"
         printf "\n\n*** End Xcode Failure ***\n"
@@ -134,11 +145,11 @@ xctest() {
     }
     rm "$log_temp"
   else
-    xcrun xcodebuild -scheme "$1" -configuration "$CONFIGURATION" -sdk iphonesimulator -destination id="$IOS_SIM_DEVICE" build test || {
-	    EXITCODE=$?
+    xcrun xcodebuild -scheme "$1" -configuration "$CONFIGURATION" -sdk iphonesimulator -destination id="$IOS_SIM_DEVICE" test || {
+        EXITCODE=$?
         echo "*** Failure (exit code $EXITCODE). ***"
         exit $EXITCODE
-	  }
+    }
   fi
 }
 
@@ -152,42 +163,43 @@ setup_ios_simulator() {
   # -- Ensure that the simulator is ready
 
   if [ $CI_RUN == true ]; then
-	# - Kill the Simulator to ensure we are running the correct one, only when running in CI
-	echo "Resetting simulator using toolchain from: $DEVELOPER_DIR"
+    # - Kill the Simulator to ensure we are running the correct one, only when running in CI
+    echo "Resetting simulator using toolchain from: $DEVELOPER_DIR"
 
-	# Quit Simulator.app to give it a chance to go down gracefully
-	local deadline=$((SECONDS+5))
-	while pgrep -qx Simulator && [ $SECONDS -lt $deadline ]; do
-	  osascript -e 'tell app "Simulator" to quit without saving' || true
-	  sleep 0.25 # otherwise the pkill following will get it too early
-	done
+    # Quit Simulator.app to give it a chance to go down gracefully
+    local deadline=$((SECONDS+5))
+    while pgrep -qx Simulator && [ $SECONDS -lt $deadline ]; do
+      osascript -e 'tell app "Simulator" to quit without saving' || true
+      sleep 0.25 # otherwise the pkill following will get it too early
+    done
 
-	# stop CoreSimulatorService
-	launchctl remove com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
-	sleep 0.25 # launchtl can take a small moment to kill services
+    # stop CoreSimulatorService
+    launchctl remove com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
+    sleep 0.25 # launchtl can take a small moment to kill services
 
-	# kill them with fire
-	while pgrep -qx Simulator com.apple.CoreSimulator.CoreSimulatorService; do
-	  pkill -9 -x Simulator com.apple.CoreSimulator.CoreSimulatorService || true
-	  sleep 0.05
-	done
+    # kill them with fire
+    while pgrep -qx Simulator com.apple.CoreSimulator.CoreSimulatorService; do
+      pkill -9 -x Simulator com.apple.CoreSimulator.CoreSimulatorService || true
+      sleep 0.05
+    done
 
-	# - Prod `simctl` a few times as sometimes it fails the first couple of times after switching XCode vesions
-	local deadline=$((SECONDS+5))
-	while [ -z "$(xcrun simctl list devices 2>/dev/null)" ] && [ $SECONDS -lt $deadline ]; do
-	  : # nothing to see here, will stop cycling on the first successful run
-	done
+    # - Prod `simctl` a few times as sometimes it fails the first couple of times after switching XCode vesions
+    local deadline=$((SECONDS+5))
+    while [ -z "$(xcrun simctl list devices 2>/dev/null)" ] && [ $SECONDS -lt $deadline ]; do
+      : # nothing to see here, will stop cycling on the first successful run
+    done
 
     # - Choose a device, if it has not already been chosen
     local deadline=$((SECONDS+5))
-    while [ -z "$IOS_SIM_DEVICE" ] && [ $SECONDS -lt $deadline ]; do
-      IOS_DEVICE=$(ruby -rjson -e "puts JSON.parse(%x{xcrun simctl list devices --json})['devices'].each{|os,group| group.each{|dev| dev['os'] = os}}.flat_map{|x| x[1]}.select{|x| x['availability'] == '(available)'}.each{|x| x['score'] = (x['name'] == '$ios_sim_default_device_type' ? 1 : 0) + (x['os'] == '$ios_sim_default_ios_version' ? 1 : 0)}.sort_by!{|x| [x['score'], x['name']]}.reverse![0]['udid']")
-      export IOS_SIM_DEVICE=$IOS_DEVICE
+    IOS_DEVICE=""
+    while [ -z "$IOS_DEVICE" ] && [ $SECONDS -lt $deadline ]; do
+        IOS_DEVICE="$(ruby $SRCROOT/scripts/find-ios-device.rb best)"
     done
-    if [ -z "$IOS_SIM_DEVICE" ]; then
+    if [ -z "$IOS_DEVICE" ]; then
       echo "*** Failed to determine the iOS Simulator device to use ***"
       exit 1
     fi
+    export IOS_SIM_DEVICE=$IOS_DEVICE
 
     # - Reset the device we will be using if running in CI
     xcrun simctl shutdown "$IOS_SIM_DEVICE" 1>/dev/null 2>/dev/null || true # sometimes simctl gets confused
@@ -201,19 +213,20 @@ setup_ios_simulator() {
     startedSimulator=true
 
   else
-  	# - ensure that the simulator is running on a developer's workstation
+      # - ensure that the simulator is running on a developer's workstation
     open "$DEVELOPER_DIR/Applications/Simulator.app"
 
     # - Select the first device booted in the simulator, since it will boot something for us
     local deadline=$((SECONDS+10))
-    while [ -z "$IOS_SIM_DEVICE" ] && [ $SECONDS -lt $deadline ]; do
-      IOS_DEVICE=$(ruby -rjson -e "puts JSON.parse(%x{xcrun simctl list devices --json})['devices'].each{|os,group| group.each{|dev| dev['os'] = os}}.flat_map{|x| x[1]}.select{|x| x['state'] == 'Booted'}[0]['udid']")
-      export IOS_SIM_DEVICE=$IOS_DEVICE
+    IOS_DEVICE=""
+    while [ -z "$IOS_DEVICE" ] && [ $SECONDS -lt $deadline ]; do
+      IOS_DEVICE="$(ruby $SRCROOT/scripts/find-ios-device.rb booted)"
     done
-    if [ -z "$IOS_SIM_DEVICE" ]; then
+    if [ -z "$IOS_DEVICE" ]; then
       echo "*** Failed to determine the iOS Simulator device in use ***"
       exit 1
     fi
+    export IOS_SIM_DEVICE=$IOS_DEVICE
   fi
 
   # Wait until the boot completes
@@ -230,19 +243,30 @@ cleanup
 trap cleanup EXIT
 
 # Use a consistent version of Node if possible.
-if [ -f "$NVM_DIR/nvm.sh" ]; then
-  . "$NVM_DIR/nvm.sh"
-elif [ -x "$(command -v brew)" ] && [ -f "$(brew --prefix nvm)/nvm.sh" ]; then
-  # we must be on mac and nvm was installed with brew
-  # TODO: change the mac slaves to use manual nvm installation
-  . "$(brew --prefix nvm)/nvm.sh"
+if [[ -z "$(command -v nvm)" ]]; then
+  set +e
+  if [ -f "$NVM_DIR/nvm.sh" ]; then
+    . "$NVM_DIR/nvm.sh" '' || true
+  elif [ -x "$(command -v brew)" ] && [ -f "$(brew --prefix nvm)/nvm.sh" ]; then
+    # we must be on mac and nvm was installed with brew
+    # TODO: change the mac slaves to use manual nvm installation
+    . "$(brew --prefix nvm)/nvm.sh" '' || true
+  elif [ -f "$HOME/.nvm/nvm.sh" ]; then
+    . ~/.nvm/nvm.sh ''
+  fi
+  set -e
 fi
-[[ "$(command -v nvm)" ]] && nvm use 6.5.0 || true
+if [[ "$(command -v nvm)" ]]; then
+  nvm install 7.10.0
+fi
 
 # Remove cached packages
 rm -rf ~/.yarn-cache/npm-realm-*
 
 case "$TARGET" in
+"check-environment")
+  npm run check-environment
+  ;;
 "eslint")
   [[ $CONFIGURATION == 'Debug' ]] && exit 0
   npm run eslint
@@ -260,14 +284,8 @@ case "$TARGET" in
   [[ $CONFIGURATION == 'Debug' ]] && exit 0
   npm run jsdoc
   ;;
-"realmjs")
-  download_server
-  start_server
-  pushd src
-  xctest RealmJS
-  stop_server
-  ;;
 "react-tests")
+  npm run check-environment
   download_server
   start_server
   pushd tests/react-test-app
@@ -280,6 +298,7 @@ case "$TARGET" in
   stop_server
   ;;
 "react-example")
+  npm run check-environment
   pushd examples/ReactExample
 
   npm install
@@ -290,6 +309,7 @@ case "$TARGET" in
   xctest ReactExample
   ;;
 "react-tests-android")
+  npm run check-environment
   if [ "$(uname)" = 'Darwin' ]; then
     download_server
     start_server
@@ -329,20 +349,21 @@ case "$TARGET" in
   echo "********* File location: $(pwd)/tests.xml *********";
   cat tests.xml
 
-  if [ "$(uname)" = 'Darwin' ]; then
-    stop_server
-  fi
-
   ;;
 "node")
+  npm run check-environment
   if [ "$(uname)" = 'Darwin' ]; then
+    echo "downloading server"
     download_server
+    echo "starting server"
     start_server
+
     npm_tests_cmd="npm run test"
-    npm install --build-from-source --realm_enable_sync
+    npm install --build-from-source=realm --realm_enable_sync
+
   else
     npm_tests_cmd="npm run test"
-    npm install --build-from-source
+    npm install --build-from-source=realm
   fi
 
   # Change to a temp directory.
@@ -355,10 +376,59 @@ case "$TARGET" in
   popd
   stop_server
   ;;
+"electron")
+  if [ "$(uname)" = 'Darwin' ]; then
+    download_server
+    start_server
+  fi
+
+  # Change to a temp directory - because this is what is done for node - but we pushd right after?
+  cd "$(mktemp -q -d -t realm.electron.XXXXXX)"
+  test_temp_dir=$PWD # set it to be cleaned at exit
+  pushd "$SRCROOT/tests/electron"
+
+  if [ "$(uname)" = 'Darwin' ]; then
+    npm install --build-from-source --realm_enable_sync
+  else
+    npm install --build-from-source
+  fi
+
+  # npm test -- --filter=ListTests
+  # npm test -- --filter=LinkingObjectsTests
+  # npm test -- --filter=ObjectTests
+  # npm test -- --filter=RealmTests
+  # npm test -- --filter=ResultsTests
+  # npm test -- --filter=QueryTests
+  # npm test -- --filter=MigrationTests
+  # npm test -- --filter=EncryptionTests
+  # npm test -- --filter=UserTests
+  # npm test -- --filter=SessionTests
+  # npm test -- --filter=GarbageCollectionTests
+  # npm test -- --filter=AsyncTests
+
+  npm test -- --process=main
+  npm test -- --process=render
+
+  popd
+
+  if [ "$(uname)" = 'Darwin' ]; then
+    stop_server
+  fi
+  ;;
 "test-runners")
-  # Create a fake realm module that points to the source root so that test-runner tests can require('realm')
-  npm install --build-from-source
+  npm run check-environment
   npm run test-runners
+  ;;
+"all")
+  # Run all tests that must pass before publishing.
+  for test in eslint license-check react-example react-tests-android react-tests; do
+    for configuration in Debug Release; do
+      echo "RUNNING TEST: $test ($configuration)"
+      echo '----------------------------------------'
+      npm test "$test" "$configuration" || die "Test Failed: $test ($configuration)"
+      echo
+    done
+  done
   ;;
 "object-store")
   pushd src/object-store
@@ -378,14 +448,6 @@ case "$TARGET" in
 
   echo -e "enterprise:\n  skip_setup: true\n" >> "tests/sync-bundle/object-server/configuration.yml"
   touch "tests/sync-bundle/object-server/do_not_open_browser"
-  ;;
-"object-server-integration")
-  echo -e "yes\n" | ./tests/sync-bundle/reset-server-realms.command
-
-  pushd "$SRCROOT/tests"
-  npm install
-  npm run test-sync-integration
-  popd
   ;;
 *)
   echo "Invalid target '${TARGET}'"

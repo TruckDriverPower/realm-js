@@ -23,8 +23,17 @@
  * {@link Realm.Results#snapshot snapshot()}, however, will **not** live update
  * (and listener callbacks added through {@link Realm.Results#addListener addListener()}
  * will thus never be called).
+ *
  * @extends Realm.Collection
  * @memberof Realm
  */
 class Results extends Collection {
+    /**
+     * Bulk update objects in the collection.
+     * @param {string} property - The name of the property.
+     * @param {string} value - The updated property value.
+     * @throws {Error} If no property with the name exists.
+     * @since 2.0.0-rc20
+     */
+    update(property, value) {}
 }

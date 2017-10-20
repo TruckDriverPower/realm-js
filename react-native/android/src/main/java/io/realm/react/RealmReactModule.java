@@ -23,7 +23,7 @@ import java.util.Map;
 import fi.iki.elonen.NanoHTTPD;
 
 class RealmReactModule extends ReactContextBaseJavaModule {
-    private static final int DEFAULT_PORT = 8082;
+    private static final int DEFAULT_PORT = 8083;
     private static boolean sentAnalytics = false;
 
     private AndroidWebServer webServer;
@@ -158,6 +158,11 @@ class RealmReactModule extends ReactContextBaseJavaModule {
                 e.printStackTrace();
             }
             final String json = map.get("postData");
+            if (json == null) {
+                Response response = newFixedLengthResponse("");
+                response.addHeader("Access-Control-Allow-Origin", "http://localhost:8081");
+                return response;
+            }  
             final String jsonResponse = processChromeDebugCommand(cmdUri, json);
 
             Response response = newFixedLengthResponse(jsonResponse);

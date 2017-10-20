@@ -18,7 +18,20 @@
 
 'use strict';
 
-var Realm = require('realm');
+const Realm = require('realm');
+
+
+if( typeof Realm.Sync !== 'undefined' && Realm.Sync !== null ) {
+    global.WARNING = "global is not available in React Native. Use it only in tests";
+    global.enableSyncTests = true;
+}
+
+const isNodeProcess = typeof process === 'object' && process + '' === '[object process]';
+function node_require(module) { return require(module); }
+
+if (isNodeProcess && process.platform === 'win32') {
+    global.enableSyncTests = false;
+}
 
 var TESTS = {
     ListTests: require('./list-tests'),
@@ -27,25 +40,25 @@ var TESTS = {
     RealmTests: require('./realm-tests'),
     ResultsTests: require('./results-tests'),
     QueryTests: require('./query-tests'),
-    MigrationTests: require('./migration-tests')
+    MigrationTests: require('./migration-tests'),
+    EncryptionTests: require('./encryption-tests'),
+    // GarbageCollectionTests: require('./garbage-collection'),
 };
 
-// encryption is not supported on windows
-if (!(typeof process === 'object' && process.platform === 'win32')) {
-    TESTS.EncryptionTests = require('./encryption-tests');
-}
-
 // If sync is enabled, run the sync tests
-if (Realm.Sync) {
+if (global.enableSyncTests) {
     TESTS.UserTests = require('./user-tests');
     TESTS.SessionTests = require('./session-tests');
+
+    // FIXME: Permission tests currently fail in chrome debugging mode.
+    if (typeof navigator === 'undefined' ||
+      !/Chrome/.test(navigator.userAgent)) { // eslint-disable-line no-undef
+     TESTS.PermissionTests = require('./permission-tests');
+    }
 }
 
-function node_require(module) { return require(module); }
-
 // If on node, run the async tests
-const isNodeProcess = typeof process === 'object' && process + '' === '[object process]';
-if (isNodeProcess) {
+if (isNodeProcess && process.platform !== 'win32') {
     TESTS.AsyncTests = node_require('./async-tests');
 }
 
@@ -75,18 +88,20 @@ exports.registerTests = function(tests) {
 };
 
 exports.prepare = function(done) {
-    if (!isNodeProcess || global.testAdminUserInfo) {
+    if (!global.enableSyncTests || !isNodeProcess || global.testAdminUserInfo) {
         done();
+        return;
     }
 
-    let helper = require('./admin-user-helper');
-    helper.createAdminUser().then(userInfo => {
-        global.testAdminUserInfo = userInfo;
-        done();
-    })
-        .catch(error => {
-            console.error("Error running admin-user-helper: " + error);
+    require('./admin-user-helper')
+        .createAdminUser()
+        .then(userInfo => {
+            global.testAdminUserInfo = userInfo;
             done();
+        })
+        .catch(error => {
+            console.error("Error running admin-user-helper", error);
+            done.fail(error);
         });
 };
 
